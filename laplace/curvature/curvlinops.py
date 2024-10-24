@@ -105,7 +105,7 @@ class CurvlinopsInterface(CurvatureInterface):
 
         loss = self.lossfunc(self.model(x), y)
 
-        return self.factor * loss.detach(), kron
+        return self.factor * loss, kron
 
     def full(
         self,
@@ -137,7 +137,7 @@ class CurvlinopsInterface(CurvatureInterface):
         f = self.model(x)
         loss = self.lossfunc(f, y)
 
-        return self.factor * loss.detach(), self.factor * H
+        return self.factor * loss, self.factor * H
 
 
 class CurvlinopsGGN(CurvlinopsInterface, GGNInterface):

@@ -71,12 +71,13 @@ class CurvatureInterface:
             )
             self.factor: float = 1.0
 
-        self.params: list[nn.Parameter] = [
-            p for p in self._model.parameters() if p.requires_grad
-        ]
-        self.params_dict: dict[str, nn.Parameter] = {
-            k: v for k, v in self._model.named_parameters() if v.requires_grad
-        }
+        self.params: list[nn.Parameter] = []
+        self.params_dict: dict[str, nn.Parameter] = {}
+        for k, v in self.model.named_parameters():
+            if v.requires_grad and k != 'adj':
+                self.params.append(v)
+                self.params_dict[k] = v
+        
         self.buffers_dict: dict[str, torch.Tensor] = {
             k: v for k, v in self.model.named_buffers()
         }
@@ -88,7 +89,7 @@ class CurvatureInterface:
     def jacobians(
         self,
         x: torch.Tensor | MutableMapping[str, torch.Tensor | Any],
-        enable_backprop: bool = False,
+        enable_backprop: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute Jacobians \\(\\nabla_{\\theta} f(x;\\theta)\\) at current parameter \\(\\theta\\),
         via torch.func.
@@ -131,7 +132,7 @@ class CurvatureInterface:
     def last_layer_jacobians(
         self,
         x: torch.Tensor | MutableMapping[str, torch.Tensor | Any],
-        enable_backprop: bool = False,
+        enable_backprop: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute Jacobians \\(\\nabla_{\\theta_\\textrm{last}} f(x;\\theta_\\textrm{last})\\)
         only at current last-layer parameter \\(\\theta_{\\textrm{last}}\\).
@@ -406,7 +407,7 @@ class GGNInterface(CurvatureInterface):
             H = torch.einsum("bcp,bcq->pq", Js, Js)
         loss = self.factor * self.lossfunc(f, y)
 
-        return loss.detach(), H.detach()
+        return loss, H
 
     def diag(
         self,
@@ -428,7 +429,7 @@ class GGNInterface(CurvatureInterface):
         else:  # The case of exact GGN for regression
             H = torch.einsum("bcp,bcp->p", Js, Js)
 
-        return loss.detach(), H.detach()
+        return loss, H
 
 
 class EFInterface(CurvatureInterface):
