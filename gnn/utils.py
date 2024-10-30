@@ -3,6 +3,8 @@ import argparse
 import torch
 from pathlib import Path
 
+from typing import Optional
+
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 from torch_geometric.utils import to_scipy_sparse_matrix, homophily
@@ -10,7 +12,7 @@ from torch_geometric.datasets import KarateClub, Planetoid, \
     Actor, WikipediaNetwork, WebKB
 
 
-BASE_OUT_DIR = '~/work/laplace-gnn-results'
+BASE_OUT_DIR = os.path.join(Path.home(), 'work/laplace-gnn-results')
 
 
 # def weighted_homophily(adj: torch.tensor, y: torch.tensor):
@@ -26,11 +28,13 @@ BASE_OUT_DIR = '~/work/laplace-gnn-results'
 #     return homophily / sparse_adj.values().sum()
 
 
-def argument_parser():    
+def argument_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        'dataset', type=str, default='cora',
-        choices=['cora', 'citeseer', 'pubmed', 'chameleon', 'squirrel'])
+        '--dataset', type=str,
+        choices=['cora', 'citeseer', 'pubmed',
+                 'chameleon', 'squirrel',
+                 'actor', 'texas', 'wisconsin', 'cornell',])
     parser.add_argument(
         '--base_out_dir', type=str, default=BASE_OUT_DIR)
     parser.add_argument(
@@ -43,7 +47,7 @@ def argument_parser():
         '--hidden_channels', type=int, default=16,
         help="Number of hidden channels in the GCN model")
     parser.add_argument(
-        '--ste_thresh', type=float, default=0.2)
+        '--ste_thresh', type=float, default=None)
     parser.add_argument(
         '--knng_k', type=int, default=3,
         help="Number of nearest neighbors for knn graph")
@@ -51,7 +55,7 @@ def argument_parser():
         '--lr', type=float, default=0.01,
         help="Learning rate for model weights")
     parser.add_argument(
-        '--lr_adj', type=float, default=0.1,
+        '--lr_adj', type=float, default=None,
         help="Learning rate for adjacency matrix")
     parser.add_argument(
         '--weight_decay', type=float, default=5e-4,
@@ -72,7 +76,10 @@ def argument_parser():
         '--init_graph', type=str, default='original',
         choices=['original', 'knng', 'none'],
         help="Initial graph structure")
-    return parser.parse_args()
+    parser.add_argument(
+        '--dropout_p', type=float, default=0.,
+        help="Dropout probability")
+    return parser
 
 def load_data(dataset):
     root = os.path.join(Path.home(), 'data')
@@ -100,6 +107,7 @@ def load_data(dataset):
         # data.test_mask[rand_idx[20:]] = True
     if data.train_mask.ndim == 1:
         data.train_mask = data.train_mask.unsqueeze(1)
+        data.val_mask = data.val_mask.unsqueeze(1)
         data.test_mask = data.test_mask.unsqueeze(1)
     return data
 
