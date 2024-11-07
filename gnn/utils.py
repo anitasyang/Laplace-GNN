@@ -36,6 +36,10 @@ def argument_parser():
                  'chameleon', 'squirrel',
                  'actor', 'texas', 'wisconsin', 'cornell',])
     parser.add_argument(
+        '--model_type', type=str,
+        choices=['stegcn', 'clipgcn', 'gcn', 'gat']
+    )
+    parser.add_argument(
         '--base_out_dir', type=str, default=BASE_OUT_DIR)
     parser.add_argument(
         '--subset_of_weights', type=str, default='all',
@@ -44,7 +48,7 @@ def argument_parser():
         '--hessian_structure', type=str, default='kron',
         choices=['full', 'diag', 'kron'])
     parser.add_argument(
-        '--hidden_channels', type=int, default=16,
+        '--hidden_channels', type=int, default=None,
         help="Number of hidden channels in the GCN model")
     parser.add_argument(
         '--ste_thresh', type=float, default=None)
@@ -52,13 +56,13 @@ def argument_parser():
         '--knng_k', type=int, default=3,
         help="Number of nearest neighbors for knn graph")
     parser.add_argument(
-        '--lr', type=float, default=0.01,
+        '--lr', type=float, default=None,
         help="Learning rate for model weights")
     parser.add_argument(
         '--lr_adj', type=float, default=None,
         help="Learning rate for adjacency matrix")
     parser.add_argument(
-        '--weight_decay', type=float, default=5e-4,
+        '--weight_decay', type=float, default=None,
         help="Weight decay for model weights")
     parser.add_argument(
         '--n_epochs', type=int, default=200,
@@ -77,8 +81,15 @@ def argument_parser():
         choices=['original', 'knng', 'none'],
         help="Initial graph structure")
     parser.add_argument(
-        '--dropout_p', type=float, default=0.,
+        '--dropout_p', type=float, default=None,
         help="Dropout probability")
+    parser.add_argument(
+        '--n_repeats', type=int, default=1,
+        help="Number of repeats for training")
+    parser.add_argument(
+        '--stop_criterion', type=str, default='valloss',
+        choices=['valloss', 'marglik'],
+        help="Stopping criterion for training")
     return parser
 
 def load_data(dataset):
@@ -110,22 +121,6 @@ def load_data(dataset):
         data.val_mask = data.val_mask.unsqueeze(1)
         data.test_mask = data.test_mask.unsqueeze(1)
     return data
-
-
-# def to_specnorm_adj(adj):
-#     # adj = adj + torch.eye(adj.size(0))
-#     adj.fill_diagonal_(1)
-#     deg = adj.sum(dim=1)
-#     deg_inv_sqrt = deg.pow(-0.5)
-#     deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
-#     return deg_inv_sqrt.view(-1, 1) * adj * deg_inv_sqrt.view(1, -1)
-
-# def to_norm_adj(adj):
-#     adj.fill_diagonal_(0)
-#     adj = adj.float()
-#     adj /= adj.sum(dim=1, keepdim=True)
-#     adj[torch.isnan(adj)] = 0
-#     return adj + torch.eye(adj.size(0))
 
 
 def edge_index_to_adj(edge_index, num_nodes=None):
@@ -166,3 +161,18 @@ def knn_graph(x, k=8, as_adj_mask=False, cosine=False):
 #     full_adj = torch.zeros(total_num_nodes, total_num_nodes)
 #     full_adj[batch_nodes, :][:, batch_nodes] = batch_adj
 #     return full_adj
+def normalize_adj(adj):
+    rowsum = adj.sum(axis=1)
+    d_inv_sqrt = rowsum.pow(-0.5).flatten()
+    d_inv_sqrt[torch.isinf(d_inv_sqrt)] = 0.
+    d_mat_inv_sqrt = torch.diag(d_inv_sqrt)
+    # return torch.mm(torch.mm(d_mat_inv_sqrt, adj), d_mat_inv_sqrt)
+    return (adj @ d_mat_inv_sqrt).T @ d_mat_inv_sqrt
+
+
+def preprocess_adj(adj):
+    device = adj.device
+    adj_id = torch.eye(adj.shape[0]).to(device)
+    adj_normalized = normalize_adj(
+        adj + adj_id)
+    return adj_normalized

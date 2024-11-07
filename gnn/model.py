@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from utils import preprocess_adj, normalize_adj
 
 
 class BinarizeSTE(torch.autograd.Function):
@@ -20,48 +21,103 @@ class BinarizeSTE(torch.autograd.Function):
         return grad_output, None
 
 
+class Clipping(torch.autograd.Function):
+    """
+    Clipping adjacency matrix.
+    """
+    @staticmethod
+    def setup_context(ctx, inputs, output):
+        ctx.save_for_backward(inputs[0])
 
-class SimpleGCN(nn.Module):
+    @staticmethod
+    def forward(input):
+        return torch.clamp(input, 0, 1)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # import ipdb; ipdb.set_trace()
+        return torch.clamp(grad_output, 0, 1)
+        # return grad_output
+
+
+class BaseGCN(nn.Module):
     def __init__(self, in_channels, hidden_channels,
-                 out_channels, init_adj: torch.Tensor, X: torch.Tensor,
-                 threshold: float = 0.5, update_adj: bool = True,
-                 dropout_p: float = 0.5):
-        super(SimpleGCN, self).__init__()
+                 out_channels, init_adj: torch.Tensor,
+                 X: torch.Tensor, dropout_p: float = 0.5):
+        super(BaseGCN, self).__init__()
+        
         self.lin1 = nn.Linear(
             in_channels, hidden_channels)
         self.lin2 = nn.Linear(
             hidden_channels, out_channels)
         self.dropout = nn.Dropout(p=dropout_p)
 
-        self.adj = nn.Parameter(init_adj, requires_grad=update_adj)
+        self.adj = nn.Parameter(
+            init_adj, requires_grad=True)
         self.X = X
-        self.threshold = threshold
-        self.update_adj = update_adj
+    
+    def forward_adj(self, *args) -> torch.Tensor:
+        raise NotImplementedError
+    
+    def forward(self, x_indices: torch.Tensor):        
+        adj = (self.adj + self.adj.T) / 2
+        adj = self.forward_adj()
+        adj.fill_diagonal_(1)  # add self-loops
+        # adj = adj + torch.eye(adj.shape[0])
 
-
-    def forward(self, x_indices: torch.Tensor):
-        if self.update_adj:
-            adj = (self.adj + self.adj.T) / 2  # Symmetric
-            adj = BinarizeSTE.apply(self.adj, self.threshold)
-            adj.fill_diagonal_(1)
-        else:
-            adj = self.adj
-
-        deg_A = torch.diag(adj.sum(axis=1).pow(-0.5))
-        aug_A = torch.mm(torch.mm(deg_A, adj), deg_A)
+        adj_normalized = normalize_adj(adj)
 
         X = self.dropout(self.X)
         X = self.lin1(X)
-        X = aug_A @ X
+        X = adj_normalized @ X
         X = nn.functional.relu(X)
 
         X = self.dropout(X)
         X = self.lin2(X)
-        X = aug_A @ X
-        # X = torch.nn.functional.relu(X)
+        X = adj_normalized @ X
 
         return X[x_indices]
 
+
+class GCN(BaseGCN):
+    def __init__(self, in_channels, hidden_channels,
+                 out_channels, init_adj, X,
+                 dropout_p = 0.5):
+        super(GCN, self).__init__(
+            in_channels, hidden_channels, out_channels,
+            init_adj, X, dropout_p)
+        self.adj: torch.Tensor = nn.Parameter(
+            init_adj, requires_grad=False)
+        
+    def forward_adj(self):
+        return self.adj
+
+
+class STEGCN(BaseGCN):
+    def __init__(self, in_channels, hidden_channels,
+                 out_channels, init_adj: torch.Tensor, X: torch.Tensor,
+                 dropout_p: float = 0.5, threshold: float = 0.5):
+        super(STEGCN, self).__init__(
+            in_channels, hidden_channels, out_channels,
+            init_adj, X, dropout_p)
+        
+        self.threshold = threshold
+    
+    def forward_adj(self):
+        return BinarizeSTE.apply(self.adj, self.threshold)
+
+
+class ClipGCN(BaseGCN):
+    def __init__(self, in_channels, hidden_channels,
+                 out_channels, init_adj: torch.Tensor, X: torch.Tensor,
+                 dropout_p: float = 0.5):
+        super(ClipGCN, self).__init__(
+            in_channels, hidden_channels, out_channels,
+            init_adj, X, dropout_p)
+    
+    def forward_adj(self):
+        return Clipping.apply(self.adj)
+        # return torch.clamp(self.adj, 0, 1)
 
 class MLP(nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels):
