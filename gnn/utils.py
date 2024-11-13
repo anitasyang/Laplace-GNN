@@ -3,6 +3,8 @@ import argparse
 import torch
 from pathlib import Path
 
+from sklearn.model_selection import ShuffleSplit
+
 from typing import Optional
 
 from torch import nn
@@ -37,7 +39,7 @@ def argument_parser():
                  'actor', 'texas', 'wisconsin', 'cornell',])
     parser.add_argument(
         '--model_type', type=str,
-        choices=['stegcn', 'clipgcn', 'gcn', 'gat']
+        choices=['stegcn', 'clipgcn', 'gcn', 'lorastegcn']
     )
     parser.add_argument(
         '--base_out_dir', type=str, default=BASE_OUT_DIR)
@@ -87,12 +89,24 @@ def argument_parser():
         '--n_repeats', type=int, default=1,
         help="Number of repeats for training")
     parser.add_argument(
-        '--stop_criterion', type=str, default='valloss',
+        '--stop_criterion', type=str, default=None,
         choices=['valloss', 'marglik'],
         help="Stopping criterion for training")
+    parser.add_argument(
+        '--lora_r', type=int, default=None,
+        help="Number of dim for LoRA")
+    parser.add_argument(
+        '--lora_alpha', type=int, default=16,
+        help="Scaling factor for LoRA")
+    parser.add_argument(
+        '--gpu_num', type=int, default=0,
+        help="GPU number")
+    parser.add_argument(
+        '--n_data_rand_splits', type=int, default=10,
+        help="Random splits for train-val-test")
     return parser
 
-def load_data(dataset):
+def load_data(dataset, n_rand_splits=1):
     root = os.path.join(Path.home(), 'data')
     if dataset in ['cora', 'citeseer', 'pubmed']:
         data = Planetoid(root=root, name=dataset.capitalize())[0]
@@ -111,15 +125,41 @@ def load_data(dataset):
             rand_idx = torch.randperm(data.x.size(0))
             data.train_mask[rand_idx[:20], i] = True
             data.test_mask[rand_idx[20:], i] = True
-        # rand_idx = torch.randperm(data.x.size(0))
-        # data.train_mask = torch.zeros_like(data.y, dtype=torch.bool)
-        # data.test_mask = torch.zeros_like(data.y, dtype=torch.bool)    
-        # data.train_mask[rand_idx[:20]] = True
-        # data.test_mask[rand_idx[20:]] = True
-    if data.train_mask.ndim == 1:
-        data.train_mask = data.train_mask.unsqueeze(1)
-        data.val_mask = data.val_mask.unsqueeze(1)
-        data.test_mask = data.test_mask.unsqueeze(1)
+    
+    if data.train_mask.ndim > 1:
+        data.train_mask = data.train_mask[:, 0]
+        data.val_mask = data.val_mask[:, 0]
+        data.test_mask = data.test_mask[:, 0]
+    data.train_indices = torch.nonzero(
+        data.train_mask, as_tuple=True)[0].unsqueeze(1)
+    data.val_indices = torch.nonzero(
+        data.val_mask, as_tuple=True)[0].unsqueeze(1)
+    data.test_indices = torch.nonzero(
+        data.test_mask, as_tuple=True)[0].unsqueeze(1)
+    
+    if n_rand_splits > 1:
+        # 60-20-20 split
+        train_percentage = 0.6
+        val_percentage = 0.2
+        train_indices, val_indices, test_indices = [], [], []
+        rs = ShuffleSplit(n_splits=n_rand_splits,
+                          train_size=train_percentage + val_percentage,
+                          random_state=0)
+        for i , (train_and_val_index, test_index) in enumerate(rs.split(data.x)):
+            train_index, val_index = next(ShuffleSplit(
+                n_splits=1, train_size=train_percentage, random_state=0).split(
+                data.x[train_and_val_index]))
+
+            train_index = train_and_val_index[train_index]
+            val_index = train_and_val_index[val_index]
+            
+            train_indices.append(train_index)
+            val_indices.append(val_index)
+            test_indices.append(test_index)
+        data.train_indices = torch.tensor(train_indices).t()
+        data.val_indices = torch.tensor(val_indices).t()
+        data.test_indices = torch.tensor(test_indices).t()
+        
     return data
 
 

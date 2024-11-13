@@ -1,3 +1,4 @@
+import math
 import torch
 from torch import nn
 from utils import preprocess_adj, normalize_adj
@@ -60,19 +61,15 @@ class BaseGCN(nn.Module):
         raise NotImplementedError
     
     def forward(self, x_indices: torch.Tensor):        
-        adj = (self.adj + self.adj.T) / 2
         adj = self.forward_adj()
-        adj.fill_diagonal_(1)  # add self-loops
-        # adj = adj + torch.eye(adj.shape[0])
 
         adj_normalized = normalize_adj(adj)
 
-        X = self.dropout(self.X)
-        X = self.lin1(X)
+        X = self.lin1(self.X)
         X = adj_normalized @ X
         X = nn.functional.relu(X)
-
         X = self.dropout(X)
+        
         X = self.lin2(X)
         X = adj_normalized @ X
 
@@ -86,6 +83,8 @@ class GCN(BaseGCN):
         super(GCN, self).__init__(
             in_channels, hidden_channels, out_channels,
             init_adj, X, dropout_p)
+        
+        init_adj.fill_diagonal_(1)
         self.adj: torch.Tensor = nn.Parameter(
             init_adj, requires_grad=False)
         
@@ -104,7 +103,52 @@ class STEGCN(BaseGCN):
         self.threshold = threshold
     
     def forward_adj(self):
-        return BinarizeSTE.apply(self.adj, self.threshold)
+        adj = (self.adj + self.adj.T) / 2
+        adj = BinarizeSTE.apply(adj, self.threshold)
+        adj.fill_diagonal_(1)  # add self-loops
+        return adj
+
+
+class LoRASTEGCN(BaseGCN):
+    def __init__(
+            self,
+            in_channels,
+            hidden_channels,
+            out_channels,
+            init_adj: torch.Tensor,
+            X: torch.Tensor,
+            r: int,
+            lora_alpha: float,
+            dropout_p: float = 0.5,
+            threshold: float = 0.5):
+        super(LoRASTEGCN, self).__init__(
+            in_channels, hidden_channels, out_channels,
+            init_adj, X, dropout_p)
+        
+        self.threshold = threshold
+        
+        # Freeze the original adjacency matrix
+        self.adj.requires_grad = False
+        N = self.adj.shape[0]
+
+        self.r = r
+        self.lora_alpha = lora_alpha
+
+        self.adj_lora_A = nn.Parameter(self.adj.new_zeros((r, N)))
+        self.adj_lora_B = nn.Parameter(self.adj.new_zeros((N, r)))
+        self.scaling = self.lora_alpha / self.r
+
+        # Initialize LoRA parameters
+        nn.init.kaiming_uniform_(self.adj_lora_A, a=math.sqrt(5))
+        nn.init.normal_(self.adj_lora_B)
+        
+    def forward_adj(self):
+        adj = self.adj + (self.adj_lora_B @ self.adj_lora_A) * self.scaling
+        adj = (adj + adj.T) / 2
+        # import ipdb; ipdb.set_trace()
+        adj = BinarizeSTE.apply(adj, self.threshold)
+        adj.fill_diagonal_(1)
+        return adj
 
 
 class ClipGCN(BaseGCN):
@@ -116,7 +160,10 @@ class ClipGCN(BaseGCN):
             init_adj, X, dropout_p)
     
     def forward_adj(self):
-        return Clipping.apply(self.adj)
+        adj = (self.adj + self.adj.T) / 2
+        adj = Clipping.apply(adj)
+        adj.fill_diagonal_(1)
+        return adj
         # return torch.clamp(self.adj, 0, 1)
 
 class MLP(nn.Module):
