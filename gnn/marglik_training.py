@@ -271,8 +271,10 @@ if __name__ == "__main__":
 
     learned_graphs_dir = osp.join(
         out_dir,
-        '_'.join([args.hessian_structure,
-                args.subset_of_weights, 'strucs']))
+        '_'.join([
+            args.model_type,
+            args.hessian_structure,
+            args.subset_of_weights, 'strucs']))
 
 
     lr_adjs = [0.3, 0.4, 0.5, 0.6, 0.7]if args.lr_adj is None \
@@ -368,6 +370,17 @@ if __name__ == "__main__":
                                                 lora_alpha=args.lora_alpha,
                                                 X=data.x,
                                                 dropout_p=dropout,)
+                                        # elif args.model_type == 'gat':
+                                        #     from models import GAT
+                                        #     model = GAT(
+                                        #         in_channels=data.x.size(1),
+                                        #         hidden_channels=hidden_channel,
+                                        #         out_channels=data.y.max().item() + 1,
+                                        #         num_layers=2,
+                                        #         init_adj=adj,
+                                        #         X=data.x,
+                                        #         heads=args.heads,
+                                        #         dropout_p=dropout,)
                                         else:
                                             raise ValueError(f"Unknown model type: {args.model_type}")
 
@@ -393,8 +406,8 @@ if __name__ == "__main__":
                                                                         )    
 
                                         marglik = lap.log_marginal_likelihood().item()
-                                        adj = lap.model.forward_adj()
-                                        edge_index = adj_to_edge_index(adj)
+                                        out_adj = lap.model.forward_adj()
+                                        edge_index = adj_to_edge_index(out_adj)
                                         h = homophily(edge_index, data.y.to(device))
                                         print(f"Final num edges: {edge_index.size(1)}, Homophily: {h:.3f}")
                                         print(f"Final Marglik: {marglik:.2f}")
@@ -479,5 +492,5 @@ if __name__ == "__main__":
     with open(rst_file, 'wb') as f:
         torch.save(model_metadata, f)
     print(f"Saved results to {rst_file}")
-
+    print(f"Intermediate graphs saved to {learned_graphs_dir}")
     import ipdb; ipdb.set_trace()

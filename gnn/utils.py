@@ -39,7 +39,8 @@ def argument_parser():
                  'actor', 'texas', 'wisconsin', 'cornell',])
     parser.add_argument(
         '--model_type', type=str,
-        choices=['stegcn', 'clipgcn', 'gcn', 'lorastegcn']
+        choices=['stegcn', 'clipgcn', 'gcn', 'lorastegcn',
+                 'gat']
     )
     parser.add_argument(
         '--base_out_dir', type=str, default=BASE_OUT_DIR)
@@ -104,6 +105,9 @@ def argument_parser():
     parser.add_argument(
         '--n_data_rand_splits', type=int, default=10,
         help="Random splits for train-val-test")
+    parser.add_argument(
+        '--heads', type=int, default=1,
+        help="Number of attention heads")
     return parser
 
 def load_data(dataset, n_rand_splits=1):

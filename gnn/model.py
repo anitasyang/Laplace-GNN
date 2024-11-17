@@ -1,6 +1,7 @@
 import math
 import torch
 from torch import nn
+from abc import abstractmethod
 from utils import preprocess_adj, normalize_adj
 
 
@@ -41,6 +42,8 @@ class Clipping(torch.autograd.Function):
         # return grad_output
 
 
+
+
 class BaseGCN(nn.Module):
     def __init__(self, in_channels, hidden_channels,
                  out_channels, init_adj: torch.Tensor,
@@ -57,7 +60,8 @@ class BaseGCN(nn.Module):
             init_adj, requires_grad=True)
         self.X = X
     
-    def forward_adj(self, *args) -> torch.Tensor:
+    @abstractmethod
+    def forward_adj(self) -> torch.Tensor:
         raise NotImplementedError
     
     def forward(self, x_indices: torch.Tensor):        
