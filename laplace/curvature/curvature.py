@@ -74,7 +74,7 @@ class CurvatureInterface:
         self.params: list[nn.Parameter] = []
         self.params_dict: dict[str, nn.Parameter] = {}
         for k, v in self.model.named_parameters():
-            if v.requires_grad and k != 'adj':
+            if v.requires_grad and 'adj' not in k:
                 self.params.append(v)
                 self.params_dict[k] = v
         

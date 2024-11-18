@@ -1,9 +1,6 @@
 from copy import deepcopy
 import os
 import os.path as osp
-from pathlib import Path
-import glob
-import re
 from tqdm import tqdm
 
 import numpy as np
@@ -16,7 +13,7 @@ from matplotlib import pyplot as plt
 
 from laplace import Laplace
 
-from model import STEGCN, ClipGCN, GCN, LoRASTEGCN
+from models import GCN, STEGCN, LoRASTEGCN, GAT
 from utils import edge_index_to_adj, adj_to_edge_index, \
     load_data, knn_graph, argument_parser
 
@@ -55,7 +52,7 @@ def marglik_optimization(
     if not osp.exists(learned_graphs_dir):
         os.makedirs(learned_graphs_dir)
     if learned_graphs_dir is not None:
-        torch.save(model.adj,
+        torch.save(model.adj.detach().clone(),
                     osp.join(learned_graphs_dir, "epoch_0.pt"))
 
     if 'adj' not in [k for k, _ in model.named_parameters()]:
@@ -340,23 +337,26 @@ if __name__ == "__main__":
                                                 in_channels=data.x.size(1),
                                                 hidden_channels=hidden_channel,
                                                 out_channels=data.y.max().item() + 1,
+                                                num_layers=2,
                                                 threshold=thres,
                                                 dropout_p=dropout,
                                                 init_adj=adj,
                                                 X=data.x,)
                                         elif args.model_type == 'clipgcn':
-                                            model = ClipGCN(
-                                                in_channels=data.x.size(1),
-                                                hidden_channels=hidden_channel,
-                                                out_channels=data.y.max().item() + 1,
-                                                dropout_p=dropout,
-                                                init_adj=adj,
-                                                X=data.x,)
+                                            raise NotImplementedError("CLIP-GCN not implemented")
+                                            # model = ClipGCN(
+                                            #     in_channels=data.x.size(1),
+                                            #     hidden_channels=hidden_channel,
+                                            #     out_channels=data.y.max().item() + 1,
+                                            #     dropout_p=dropout,
+                                            #     init_adj=adj,
+                                            #     X=data.x,)
                                         elif args.model_type == 'gcn':
                                             model = GCN(
                                                 in_channels=data.x.size(1),
                                                 hidden_channels=hidden_channel,
                                                 out_channels=data.y.max().item() + 1,
+                                                num_layers=2,
                                                 init_adj=adj,
                                                 X=data.x,
                                                 dropout_p=dropout,)
@@ -365,22 +365,22 @@ if __name__ == "__main__":
                                                 in_channels=data.x.size(1),
                                                 hidden_channels=hidden_channel,
                                                 out_channels=data.y.max().item() + 1,
+                                                num_layers=2,
                                                 init_adj=adj,
                                                 r=lora_r,
                                                 lora_alpha=args.lora_alpha,
                                                 X=data.x,
                                                 dropout_p=dropout,)
-                                        # elif args.model_type == 'gat':
-                                        #     from models import GAT
-                                        #     model = GAT(
-                                        #         in_channels=data.x.size(1),
-                                        #         hidden_channels=hidden_channel,
-                                        #         out_channels=data.y.max().item() + 1,
-                                        #         num_layers=2,
-                                        #         init_adj=adj,
-                                        #         X=data.x,
-                                        #         heads=args.heads,
-                                        #         dropout_p=dropout,)
+                                        elif args.model_type == 'gat':
+                                            model = GAT(
+                                                in_channels=data.x.size(1),
+                                                hidden_channels=hidden_channel,
+                                                out_channels=data.y.max().item() + 1,
+                                                num_layers=2,
+                                                init_adj=adj,
+                                                X=data.x,
+                                                heads=args.heads,
+                                                dropout_p=dropout,)
                                         else:
                                             raise ValueError(f"Unknown model type: {args.model_type}")
 

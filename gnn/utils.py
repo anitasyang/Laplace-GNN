@@ -36,7 +36,8 @@ def argument_parser():
         '--dataset', type=str,
         choices=['cora', 'citeseer', 'pubmed',
                  'chameleon', 'squirrel',
-                 'actor', 'texas', 'wisconsin', 'cornell',])
+                 'actor', 'texas', 'wisconsin', 'cornell',
+                 'karate'])
     parser.add_argument(
         '--model_type', type=str,
         choices=['stegcn', 'clipgcn', 'gcn', 'lorastegcn',
@@ -122,30 +123,31 @@ def load_data(dataset, n_rand_splits=1):
         data = WebKB(root=root, name=dataset.capitalize())[0]
     elif dataset == 'karate':
         data = KarateClub()[0]
-        torch.manual_seed(0)
-        data.train_mask = torch.zeros((data.y.size(0), 10), dtype=torch.bool)
-        data.test_mask = torch.zeros((data.y.size(0), 10), dtype=torch.bool)
-        for i in range(10):
-            rand_idx = torch.randperm(data.x.size(0))
-            data.train_mask[rand_idx[:20], i] = True
-            data.test_mask[rand_idx[20:], i] = True
+        # torch.manual_seed(0)
+        # data.train_mask = torch.zeros((data.y.size(0), 10), dtype=torch.bool)
+        # data.test_mask = torch.zeros((data.y.size(0), 10), dtype=torch.bool)
+        # for i in range(10):
+        #     rand_idx = torch.randperm(data.x.size(0))
+        #     data.train_mask[rand_idx[:20], i] = True
+        #     data.test_mask[rand_idx[20:], i] = True
     
-    if data.train_mask.ndim > 1:
-        data.train_mask = data.train_mask[:, 0]
-        data.val_mask = data.val_mask[:, 0]
-        data.test_mask = data.test_mask[:, 0]
-    data.train_indices = torch.nonzero(
-        data.train_mask, as_tuple=True)[0].unsqueeze(1)
-    data.val_indices = torch.nonzero(
-        data.val_mask, as_tuple=True)[0].unsqueeze(1)
-    data.test_indices = torch.nonzero(
-        data.test_mask, as_tuple=True)[0].unsqueeze(1)
-    
-    if n_rand_splits > 1:
+    if n_rand_splits == 1 and hasattr(data, 'train_mask'):
+        if data.train_mask.ndim > 1:
+            data.train_mask = data.train_mask[:, 0]
+            data.val_mask = data.val_mask[:, 0]
+            data.test_mask = data.test_mask[:, 0]
+        data.train_indices = torch.nonzero(
+            data.train_mask, as_tuple=True)[0].unsqueeze(1)
+        data.val_indices = torch.nonzero(
+            data.val_mask, as_tuple=True)[0].unsqueeze(1)
+        data.test_indices = torch.nonzero(
+            data.test_mask, as_tuple=True)[0].unsqueeze(1)
+    else:
         # 60-20-20 split
         train_percentage = 0.6
         val_percentage = 0.2
         train_indices, val_indices, test_indices = [], [], []
+        train_masks, val_masks, test_masks = [], [], []
         rs = ShuffleSplit(n_splits=n_rand_splits,
                           train_size=train_percentage + val_percentage,
                           random_state=0)
@@ -156,14 +158,30 @@ def load_data(dataset, n_rand_splits=1):
 
             train_index = train_and_val_index[train_index]
             val_index = train_and_val_index[val_index]
+            train_mask = torch.zeros_like(data.y, dtype=torch.bool)
+            
+            val_mask = torch.zeros_like(data.y, dtype=torch.bool)
+            test_mask = torch.zeros_like(data.y, dtype=torch.bool)
+            train_mask[train_index] = True
+            val_mask[val_index] = True
+            test_mask[test_index] = True
             
             train_indices.append(train_index)
             val_indices.append(val_index)
             test_indices.append(test_index)
+            
+            train_masks.append(train_mask)
+            val_masks.append(val_mask)
+            test_masks.append(test_mask)
+
+
         data.train_indices = torch.tensor(train_indices).t()
         data.val_indices = torch.tensor(val_indices).t()
         data.test_indices = torch.tensor(test_indices).t()
         
+        data.train_mask = torch.stack(train_masks, dim=1)
+        data.val_mask = torch.stack(val_masks, dim=1)
+        data.test_mask = torch.stack(test_masks, dim=1)
     return data
 
 
