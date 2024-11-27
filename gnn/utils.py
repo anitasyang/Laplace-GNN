@@ -131,7 +131,7 @@ def load_data(dataset, n_rand_splits=1):
         #     data.train_mask[rand_idx[:20], i] = True
         #     data.test_mask[rand_idx[20:], i] = True
     
-    if n_rand_splits == 1 and hasattr(data, 'train_mask'):
+    if n_rand_splits == 1 and hasattr(data, 'val_mask'):
         if data.train_mask.ndim > 1:
             data.train_mask = data.train_mask[:, 0]
             data.val_mask = data.val_mask[:, 0]

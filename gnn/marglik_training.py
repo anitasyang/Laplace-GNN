@@ -1,4 +1,5 @@
 from copy import deepcopy
+import warnings
 import os
 import os.path as osp
 from tqdm import tqdm
@@ -51,9 +52,6 @@ def marglik_optimization(
 
     if not osp.exists(learned_graphs_dir):
         os.makedirs(learned_graphs_dir)
-    if learned_graphs_dir is not None:
-        torch.save(model.adj.detach().clone(),
-                    osp.join(learned_graphs_dir, "epoch_0.pt"))
 
     if 'adj' not in [k for k, _ in model.named_parameters()]:
         raise ValueError("Expected 'adj' in model parameters")
@@ -140,8 +138,10 @@ def marglik_optimization(
             num_edges = _edge_index.size(1)
             # Save intermediate edge indices
             if learned_graphs_dir is not None:
-                torch.save(_edge_index,
-                        osp.join(learned_graphs_dir, f"epoch_{epoch}.pt"))
+                torch.save(
+                    {'edge_index': _edge_index, 'marglik': -marglik.item(),
+                     'num_edges': num_edges, 'homophily': h},
+                    osp.join(learned_graphs_dir, f"epoch_{epoch}.pt"))
             print(f"Epoch {epoch}: Marglik={-margliks[-1]:.2f}, Num edges={num_edges}, Homophily={h:.3f}")
         
         if val_indices is not None and val_labels is not None:
@@ -250,11 +250,11 @@ if __name__ == "__main__":
             ['stegcn', 'lorastegcn'] else 'valloss'
 
     if args.model_type in ['gcn', 'gat'] and args.stop_criterion == 'marglik':
-        raise ValueError(
+        warnings.warn(
             "Marglik should not be used as the stop criteria for GCN and GAT models")
 
     if 'ste' in args.model_type and args.stop_criterion == 'valloss':
-        raise ValueError(
+        warnings.warn(
             "Validation loss should not be used as the stop criteria for STE models")
     
     best_model_dict = None
@@ -446,7 +446,7 @@ if __name__ == "__main__":
                                         stats['best model epoch'].append(best_model_epoch)
                                         
 
-                                        print(f'Marglik={marglik}, Mean Val Acc={mean_val_acc:.3f}, Mean Test Acc={mean_test_acc:.3f}')
+                                        print(f'Marglik={marglik}, Mean Val Acc={mean_val_acc:.3f}, Mean Test Acc={mean_test_acc:.3f}, Best Model Epoch={best_model_epoch}')
 
                                         # save model
                                         if marglik > best_marglik:
@@ -454,7 +454,10 @@ if __name__ == "__main__":
                                             best_model_dict = deepcopy(lap.model.state_dict())
                                             print('Saving best model to:', out_dir)
                                             torch.save(lap.model.state_dict(), osp.join(out_dir, f'{args.dataset}_model.pt'))
-                                            # best_model_meta = meta
+                                            torch.save({'edge_index': edge_index, 'marglik': marglik,
+                                                        'test_acc': mean_test_acc,
+                                                        'homophily': h, 'num_edges': edge_index.size(1)},
+                                                       osp.join(out_dir, f'{args.dataset}_edge_index.pt'))
                                         
                                         margliks.append(marglik)
                                 meta = {k: (np.mean(v), np.std(v)) for k, v in stats.items()}
