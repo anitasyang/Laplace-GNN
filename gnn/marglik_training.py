@@ -157,7 +157,8 @@ def marglik_optimization(
             _edge_index = adj_to_edge_index(_adj)
             h = homophily(_edge_index, y.to(device))
             num_edges = _edge_index.size(1)
-                
+            
+            eval_indices = torch.cat([train_indices, val_indices], dim=0)
             global_h, avg_train_local_h, avg_eval_local_h = avg_local_homophilies(
                 _adj, train_indices, eval_indices, y)
             print("Homophily global, local train, local eval:"
