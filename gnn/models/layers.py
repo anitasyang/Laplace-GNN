@@ -2,6 +2,29 @@ import torch
 import torch.nn as nn
 
 
+class GraphSAGEConv(nn.Module):
+    def __init__(self, in_channels, out_channels,
+                 bias: bool = True):
+        super(GraphSAGEConv, self).__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.lin = nn.Linear(
+            in_channels * 2, out_channels, bias=bias)
+                    
+    def reset_parameters(self):
+        self.lin.reset_parameters()
+    
+    def mean_agg(self, adj, x):
+        adj /= adj.sum(dim=1, keepdims=True)
+        return adj @ x
+    
+    def forward(self, adj, x):
+        x_neigh = self.mean_agg(adj, x)  # aggregate neighbors
+        x = torch.cat([x, x_neigh], dim=-1)
+        return self.lin(x)
+
+
 class GCNConv(nn.Module):
     def __init__(self, in_channels, out_channels,
                  bias: bool = True):

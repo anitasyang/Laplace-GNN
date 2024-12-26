@@ -116,7 +116,7 @@ class BaseLaplace:
         self.params: list[torch.Tensor] = []
         self.is_subset_params: bool = False
         for k, p in model.named_parameters():
-            if p.requires_grad and "adj" not in k:
+            if p.requires_grad and "adj" not in k and 'norms' not in k:
                 self.params.append(p)
             else:
                 self.is_subset_params = True

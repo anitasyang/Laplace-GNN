@@ -2,7 +2,9 @@ from copy import deepcopy
 import warnings
 import os
 import os.path as osp
+import time
 from tqdm import tqdm
+from itertools import product
 
 import numpy as np
 import torch
@@ -14,9 +16,11 @@ from matplotlib import pyplot as plt
 
 from laplace import Laplace
 
-from models import GCN, STEGCN, LoRASTEGCN, GAT
+from models import GCN, STEGCN, LoRASTEGCN, GAT, \
+    STEGraphSAGE, GraphSAGE
 from utils import edge_index_to_adj, adj_to_edge_index, \
-    load_data, knn_graph, argument_parser
+    load_data, get_knn_graph, argument_parser, get_learned_graphs_dir, \
+    fully_connected_labels
 
 
 def marglik_optimization(
@@ -33,6 +37,7 @@ def marglik_optimization(
         n_epochs=100,
         n_hypersteps=20,
         n_epochs_burnin=40,
+        n_hyper_stop=None,
         marglik_frequency=20,
         subset_of_weights="all",
         hessian_structure="diag",
@@ -56,20 +61,24 @@ def marglik_optimization(
     if 'adj' not in [k for k, _ in model.named_parameters()]:
         raise ValueError("Expected 'adj' in model parameters")
         
-    no_adj_update = args.model_type in ['gcn', 'gat']
+    no_adj_update = args.model_type in ['gcn', 'gat', 'graphsage']
+    n_hyper_stop = n_hyper_stop if n_hyper_stop is not None else n_epochs
 
     # use weight decay
     optimizer = torch.optim.Adam(
         [v for k, v in model.named_parameters() if 'adj' not in k],
         lr=lr, weight_decay=weight_decay)
 
-    if args.model_type == 'lorastegcn':
-        adj_optimizer = torch.optim.SGD(
-            [model.adj_lora_A, model.adj_lora_B], lr=lr_adj)
-        print("Using LoRA adj optimizer")
-    else:
-        adj_optimizer = torch.optim.SGD([model.adj], lr=lr_adj)
-    
+    if not no_adj_update:
+        if args.model_type == 'lorastegcn':
+            adj_optimizer = torch.optim.SGD(
+                [model.adj_lora_A, model.adj_lora_B], lr=lr_adj,
+                weight_decay=weight_decay_adj)
+            print("Using LoRA adj optimizer")
+        else:
+            adj_optimizer = torch.optim.SGD([model.adj], lr=lr_adj,
+                                            weight_decay=weight_decay_adj)
+
     losses = list()
     best_model_dict = None
     
@@ -82,8 +91,8 @@ def marglik_optimization(
     criterion = torch.nn.CrossEntropyLoss()
     
     train_dataset = TensorDataset(train_indices, train_labels)
-    train_loader = DataLoader(train_dataset, batch_size=1000, shuffle=False)
-    
+    train_loader = DataLoader(train_dataset, batch_size=10000,
+                              shuffle=False)
 
     N = train_labels.size(0)
 
@@ -111,7 +120,7 @@ def marglik_optimization(
 
         # if no_adj_update or (epoch % marglik_frequency) != 0 or epoch < n_epochs_burnin:
         #     continue
-        if stop_criterion == 'marglik' or not no_adj_update:
+        if stop_criterion == 'marglik':
             lap = Laplace(
                 model,
                 "classification",
@@ -121,7 +130,16 @@ def marglik_optimization(
             marglik = -lap.log_marginal_likelihood()
             margliks.append(marglik.item())
 
-        if not no_adj_update and (epoch % marglik_frequency) == 0 and epoch >= n_epochs_burnin:
+        if epoch < n_hyper_stop and not no_adj_update and \
+                (epoch % marglik_frequency) == 0 and epoch >= n_epochs_burnin:
+            lap = Laplace(
+                model,
+                "classification",
+                subset_of_weights=subset_of_weights,
+                hessian_structure=hessian_structure,)
+            lap.fit(train_loader)
+            marglik = -lap.log_marginal_likelihood()
+            margliks.append(marglik.item())
             for _ in range(n_hypersteps):
                 adj_optimizer.zero_grad()
                 marglik.backward()
@@ -130,25 +148,38 @@ def marglik_optimization(
                 marglik = -lap.log_marginal_likelihood()
                 margliks.append(marglik.item())
             
-            _adj = model.forward_adj()  # adj used in forward pass
+            if 'graphsage' in args.model_type:
+                _adj = model.forward_adj(full_adj=True)
+            else:
+                _adj = model.forward_adj()  # adj used in forward pass
+            _adj = (_adj > 0).float()
             
             _edge_index = adj_to_edge_index(_adj)
             h = homophily(_edge_index, y.to(device))
-            
             num_edges = _edge_index.size(1)
+                
+            global_h, avg_train_local_h, avg_eval_local_h = avg_local_homophilies(
+                _adj, train_indices, eval_indices, y)
+            print("Homophily global, local train, local eval:"
+                  f"{global_h:.3f}, {avg_train_local_h:.3f}, {avg_eval_local_h:.3f}")
+
             # Save intermediate edge indices
             if learned_graphs_dir is not None:
                 torch.save(
-                    {'edge_index': _edge_index, 'marglik': -marglik.item(),
-                     'num_edges': num_edges, 'homophily': h},
+                    {'edge_index': _edge_index.detach().cpu(),
+                     'marglik': -marglik.item(),
+                     'num_edges': num_edges,
+                     'homophily': h,
+                     'epoch': epoch},
                     osp.join(learned_graphs_dir, f"epoch_{epoch}.pt"))
+                torch.save(_adj.detach(), osp.join(learned_graphs_dir, 'latest_adj.pt'))
             print(f"Epoch {epoch}: Marglik={-margliks[-1]:.2f}, Num edges={num_edges}, Homophily={h:.3f}")
         
         if val_indices is not None and val_labels is not None:
             val_f = model(val_indices)
             val_loss = criterion(val_f, val_labels).item()
             val_losses.append(val_loss)
-            # val_acc = (val_f.argmax(dim=1) == val_labels).sum().item() / val_labels.size(0)
+            val_acc = (val_f.argmax(dim=1) == val_labels).sum().item() / val_labels.size(0)
 
         # early stopping on marginal likelihood
         if stop_criterion == 'marglik' and margliks[-1] < best_marglik and epoch > n_epochs_burnin:
@@ -161,12 +192,14 @@ def marglik_optimization(
             best_model_epoch = epoch
             best_val_loss = val_losses[-1]
             # print(f'Epoch {epoch}: Saving new best model based on val loss. Val Loss={best_val_loss:.2f}')
-        
+
         if epoch % 20 == 0:
             print(f'Epoch {epoch}: Loss={epoch_loss:.3f}, ' +
                   f'Perf={epoch_perf / N:.3f}, ' +
-                  f'Val Loss={val_loss:.3f}')
-
+                  f'Val Loss={val_loss:.3f}, ' +
+                  f'Val Acc={val_acc:.3f}')
+            print()
+    
     if best_model_dict is not None:
         model.load_state_dict(best_model_dict)
     
@@ -176,6 +209,12 @@ def marglik_optimization(
         subset_of_weights=subset_of_weights,
         hessian_structure=hessian_structure,)
     lap.fit(train_loader)
+
+    torch.save(
+        {'val_loss': val_losses, 'train_loss': losses,
+         'epochs': np.arange(1, n_epochs + 1).tolist(),},
+        osp.join(learned_graphs_dir, f"losses.pt"))
+
     return lap, margliks, val_losses, losses, best_model_epoch
 
 
@@ -202,6 +241,7 @@ def mc_eval(lap: Laplace, indices, labels, criterion,
         / labels.size(0)
     return loss, acc
 
+
 if __name__ == "__main__":
     parser = argument_parser()
     args = parser.parse_args()
@@ -227,14 +267,17 @@ if __name__ == "__main__":
             data.edge_index, num_nodes=data.x.size(0)).float()
         # import ipdb; ipdb.set_trace()
     elif args.init_graph == 'knng':
-        from torch_geometric.nn import knn_graph
-        edge_index = knn_graph(data.x, k=args.knng_k,
-                               batch=None, loop=False, cosine=False)
-        adj = edge_index_to_adj(edge_index, num_nodes=data.x.size(0)).float()
-        adj = (adj + adj.t()).bool().float()
-        adj += torch.eye(data.x.size(0))
+        adj = get_knn_graph(data.x, args.knng_k)
     elif args.init_graph == 'none':
         adj = torch.eye(data.x.size(0))
+    elif args.init_graph == 'fc_label':
+        adj = fully_connected_labels(data.y)
+    elif osp.exists(args.init_graph):
+        rst = torch.load(args.init_graph, weights_only=True)
+        adj = edge_index_to_adj(
+            rst['edge_index'].detach(), data.num_nodes).float()
+        # adj = (adj + adj.t()).bool().float()
+        # adj.fill_diagonal_(1)
     else:
         raise ValueError(
             f"Unknown initial graph structure: {args.init_graph}.",
@@ -247,7 +290,7 @@ if __name__ == "__main__":
 
     if args.stop_criterion == None:
         args.stop_criterion = 'marglik' if args.model_type in \
-            ['stegcn', 'lorastegcn'] else 'valloss'
+            ['stegcn', 'lorastegcn', 'stegraphsage'] else 'valloss'
 
     if args.model_type in ['gcn', 'gat'] and args.stop_criterion == 'marglik':
         warnings.warn(
@@ -259,6 +302,7 @@ if __name__ == "__main__":
     
     best_model_dict = None
     best_marglik = -np.inf
+    best_valloss = np.inf
     best_model_meta = dict()
 
     margliks = list()
@@ -266,12 +310,10 @@ if __name__ == "__main__":
 
     criterion = torch.nn.CrossEntropyLoss()
 
-    learned_graphs_dir = osp.join(
-        out_dir,
-        '_'.join([
-            args.model_type,
-            args.hessian_structure,
-            args.subset_of_weights, 'strucs']))
+    learned_graphs_dir = get_learned_graphs_dir(
+        out_dir, args.init_graph, args.model_type,
+        args.hessian_structure, args.subset_of_weights
+    )
 
 
     lr_adjs = [0.3, 0.4, 0.5, 0.6, 0.7]if args.lr_adj is None \
@@ -281,7 +323,7 @@ if __name__ == "__main__":
     if args.model_type in ['gcn', 'gat']:
         lr_adjs = [0.]  # no adj learning for GCN and GAT
     
-    if args.model_type in ['stegcn', 'lorastegcn']:
+    if args.model_type in ['stegcn', 'lorastegcn', 'stegraphsage']:
         # grid search over STE thresholds if not specified
         ste_thresholds = np.arange(0.1, 1.0, 0.1) if args.ste_thresh is None \
             else [args.ste_thresh]
@@ -298,178 +340,262 @@ if __name__ == "__main__":
         else [0.2, 0.3, 0.4, 0.5]
     lora_rs = [16, 32, 64] if (args.lora_r is None and 'lora' in args.model_type) \
         else [args.lora_r]
+    norms = ['batch', 'layer', 'none'] if args.norm is None \
+        else [args.norm]
+    res_conn = [True, False] if args.res is None \
+        else [args.res]
+    weight_decays_adj = [5e-3, 5e-4, 5e-5, 5e-6, 5e-7] if (args.weight_decay_adj is None and
+                                               'ste' in args.model_type) \
+        else [args.weight_decay_adj]
+    # import ipdb; ipdb.set_trace()
+    def hyperparam_search():
+        hyperparam_space = {
+            'res': res_conn,
+            'norm': norms,
+            'lora_r': lora_rs,
+            'lr': lrs,
+            'weight_decay': weight_decays,
+            'hidden_channel': hidden_channels,
+            'dropout': dropouts,
+            'lr_adj': lr_adjs,
+            'thres': ste_thresholds,
+            'weight_decay_adj': weight_decays_adj,
+        }
+        for k, v in hyperparam_space.items():
+            if len(v) > 1:
+                print(f"Hyperparam search space for {k}: {v}")
+        combinations = product(*hyperparam_space.values())
+        total = np.prod([len(v) for v in hyperparam_space.values()])
 
+        for combination in tqdm(combinations, desc='Hyperparam search', total=total):
+            yield dict(zip(hyperparam_space.keys(), combination))
     
-    for lora_r in tqdm(lora_rs, desc='LoRA r'):
-        for lr in tqdm(lrs, desc='Learning rate'):
-            for weight_decay in tqdm(weight_decays, desc='Weight decay'):
-                for hidden_channel in tqdm(hidden_channels, desc='Hidden channels'):
-                    for dropout in tqdm(dropouts, desc='Dropout'):
-                        for lr_adj in tqdm(lr_adjs, desc='Learning rate adj'):
-                            for thres in tqdm(ste_thresholds, desc='STE threshold'):
-                                print('-' * 10,
-                                    f"lr={lr:.2f}, ",
-                                    f"weight_decay={weight_decay}, ",
-                                    f"hidden_channels={hidden_channel}, ",
-                                    f"dropout={dropout:.2f}, ",
-                                    f"lr_adj={lr_adj:.2f}, ",
-                                    f"ste_thres={thres:.2f}",
-                                    f"lora_r={str(lora_r)}",
-                                    '-' * 10)
-                                
-                                stats = defaultdict(list)
+    for hyperparams in hyperparam_search():
+        res = hyperparams['res']
+        norm = hyperparams['norm']
+        lora_r = hyperparams['lora_r']
+        lr = hyperparams['lr']
+        weight_decay = hyperparams['weight_decay']
+        hidden_channel = hyperparams['hidden_channel']
+        dropout = hyperparams['dropout']
+        lr_adj = hyperparams['lr_adj']
+        thres = hyperparams['thres']
+        weight_decay_adj = hyperparams['weight_decay_adj']
 
-                                n_splits = data.train_indices.size(1)
-                                for split_idx in range(n_splits):
-                                    train_indices = data.train_indices[:, split_idx]
-                                    train_labels = data.y[train_indices]
-                                    val_indices = data.val_indices[:, split_idx]
-                                    val_labels = data.y[val_indices]
-                                    test_indices = data.test_indices[:, split_idx]
-                                    test_labels = data.y[test_indices]
+        print('-' * 10,
+            f"lr={lr:.2f}, ",
+            f"weight_decay={weight_decay}, ",
+            f"hidden_channels={hidden_channel}, ",
+            f"dropout={dropout:.2f}, ",
+            f"lr_adj={lr_adj:.2f}, ",
+            f"ste_thres={thres:.2f}, ",
+            f"lora_r={str(lora_r)}, ",
+            f"norm={norm}, ",
+            f"res={res}",
+            f"weight_decay_adj={weight_decay_adj}",
+            '-' * 10)
+        
+        stats = defaultdict(list)
 
-                                    for repeat in range(args.n_repeats):
-                                        print('-' * 20,
-                                              f"Split: {split_idx + 1} / {n_splits} (Repeat {repeat + 1})",
-                                              '-' * 20)
-                                        if args.model_type == 'stegcn':
-                                            model = STEGCN(
-                                                in_channels=data.x.size(1),
-                                                hidden_channels=hidden_channel,
-                                                out_channels=data.y.max().item() + 1,
-                                                num_layers=2,
-                                                threshold=thres,
-                                                dropout_p=dropout,
-                                                init_adj=adj,
-                                                X=data.x,)
-                                        elif args.model_type == 'clipgcn':
-                                            raise NotImplementedError("CLIP-GCN not implemented")
-                                            # model = ClipGCN(
-                                            #     in_channels=data.x.size(1),
-                                            #     hidden_channels=hidden_channel,
-                                            #     out_channels=data.y.max().item() + 1,
-                                            #     dropout_p=dropout,
-                                            #     init_adj=adj,
-                                            #     X=data.x,)
-                                        elif args.model_type == 'gcn':
-                                            model = GCN(
-                                                in_channels=data.x.size(1),
-                                                hidden_channels=hidden_channel,
-                                                out_channels=data.y.max().item() + 1,
-                                                num_layers=2,
-                                                init_adj=adj,
-                                                X=data.x,
-                                                dropout_p=dropout,)
-                                        elif args.model_type == 'lorastegcn':
-                                            model = LoRASTEGCN(
-                                                in_channels=data.x.size(1),
-                                                hidden_channels=hidden_channel,
-                                                out_channels=data.y.max().item() + 1,
-                                                num_layers=2,
-                                                init_adj=adj,
-                                                r=lora_r,
-                                                lora_alpha=args.lora_alpha,
-                                                X=data.x,
-                                                dropout_p=dropout,)
-                                        elif args.model_type == 'gat':
-                                            model = GAT(
-                                                in_channels=data.x.size(1),
-                                                hidden_channels=hidden_channel,
-                                                out_channels=data.y.max().item() + 1,
-                                                num_layers=2,
-                                                init_adj=adj,
-                                                X=data.x,
-                                                heads=args.heads,
-                                                dropout_p=dropout,)
-                                        else:
-                                            raise ValueError(f"Unknown model type: {args.model_type}")
+        n_splits = data.train_indices.size(1)
+        for split_idx in range(n_splits):
+            train_indices = data.train_indices[:, split_idx]
+            train_labels = data.y[train_indices]
+            val_indices = data.val_indices[:, split_idx]
+            val_labels = data.y[val_indices]
+            test_indices = data.test_indices[:, split_idx]
+            test_labels = data.y[test_indices]
 
-                                        lap, _, _, _, best_model_epoch = marglik_optimization(
-                                                                            model,
-                                                                            train_indices=train_indices,
-                                                                            train_labels=train_labels,
-                                                                            val_indices=val_indices,
-                                                                            val_labels=val_labels,
-                                                                            y=data.y,
-                                                                            stop_criterion=args.stop_criterion,
-                                                                            lr_adj=lr_adj,
-                                                                            lr=lr,
-                                                                            weight_decay=weight_decay,
-                                                                            n_epochs=args.n_epochs,
-                                                                            n_hypersteps=args.n_hypersteps,
-                                                                            n_epochs_burnin=args.n_epochs_burnin,
-                                                                            marglik_frequency=args.marglik_frequency,
-                                                                            subset_of_weights=args.subset_of_weights,
-                                                                            hessian_structure=args.hessian_structure,
-                                                                            device=device,
-                                                                            learned_graphs_dir=learned_graphs_dir,
-                                                                        )    
+            # homophily
+            from plots.interaction_bounds import avg_local_homophilies, \
+                avg_receptive_field_degree
+            global_h, avg_train_local_h, avg_test_local_h = avg_local_homophilies(
+                adj, train_indices, test_indices, data.y)
+            print("Homophily global, local train, local test:"
+                    f"{global_h:.3f}, {avg_train_local_h:.3f}, {avg_test_local_h:.3f}")
+            train_nodes_receptive_field = avg_receptive_field_degree(adj, train_indices, 2)
+            test_nodes_receptive_field = avg_receptive_field_degree(adj, test_indices, 2)
+            print(f"Train / test nodes avg receptive field degree:"
+                  f"{train_nodes_receptive_field:.3f} "
+                  f"{test_nodes_receptive_field:.3f}")
+            
+            # # import ipdb; ipdb.set_trace()
+            # _adj = adj.to(device)
+            # eval_indices = torch.cat([val_indices, test_indices], dim=0)
+            # n_train_train_edges = _adj[train_indices, :][:, train_indices].count_nonzero().item()
+            # n_train_eval_edges = _adj[train_indices, :][:, eval_indices].count_nonzero().item()
+            # n_eval_eval_edges = _adj[eval_indices, :][:, eval_indices].count_nonzero().item()
+            # print(f"Train-train edges: {n_train_train_edges}, "
+            #       f"Train-eval edges: {n_train_eval_edges}, "
+            #       f"Eval-eval edges: {n_eval_eval_edges}")
 
-                                        marglik = lap.log_marginal_likelihood().item()
-                                        out_adj = lap.model.forward_adj()
-                                        edge_index = adj_to_edge_index(out_adj)
-                                        h = homophily(edge_index, data.y.to(device))
-                                        print(f"Final num edges: {edge_index.size(1)}, Homophily: {h:.3f}")
-                                        print(f"Final Marglik: {marglik:.2f}")
-                                        
-                                        # mean predictive
-                                        mean_val_loss, mean_val_acc = mean_eval(lap, val_indices, val_labels, criterion)
-                                        mean_test_loss, mean_test_acc = mean_eval(lap, test_indices, test_labels, criterion)
-                                        
-                                        # nn posterior predictive
-                                        nn_mc_val_loss, nn_mc_val_acc = mc_eval(
-                                            lap, val_indices, val_labels, criterion, pred_type='nn')
-                                        nn_mc_test_loss, nn_mc_test_acc = mc_eval(
-                                            lap, test_indices, test_labels, criterion, pred_type='nn')
-                                        
-                                        # # glm posterior predictive
-                                        # glm_mc_val_loss, glm_mc_val_acc = mc_eval(
-                                        #     lap, val_indices, val_labels, criterion, pred_type='glm')
-                                        # glm_mc_test_loss, glm_mc_test_acc = mc_eval(
-                                        #     lap, test_indices, test_labels, criterion, pred_type='glm')
-                                        # stats['glm mc val loss'].append(glm_mc_val_loss)
-                                        # stats['glm mc val acc'].append(glm_mc_val_acc)
-                                        # stats['glm mc test los '].append(glm_mc_test_acc)
 
-                                        # track test acc at mean
-                                        stats['marglik'].append(marglik)
-                                        stats['mean val loss'].append(mean_val_loss)
-                                        stats['mean val acc'].append(mean_val_acc)
-                                        stats['nn mc val loss'].append(nn_mc_val_loss)
-                                        stats['nn mc val acc'].append(nn_mc_val_acc)
-                                        stats['mean test loss'].append(mean_test_loss)
-                                        stats['mean test acc'].append(mean_test_acc)
-                                        stats['nn mc test loss'].append(nn_mc_test_loss)
-                                        stats['nn mc test acc'].append(nn_mc_test_acc)
-                                        stats['homophily'].append(h)
-                                        stats['num edges'].append(edge_index.size(1))
-                                        stats['best model epoch'].append(best_model_epoch)
-                                        
+            for repeat in range(args.n_repeats):
+                print('-' * 20,
+                        f"Split: {split_idx + 1} / {n_splits} (Repeat {repeat + 1})",
+                        '-' * 20)
+                if args.model_type == 'stegcn':
+                    model = STEGCN(
+                        in_channels=data.x.size(1),
+                        hidden_channels=hidden_channel,
+                        out_channels=data.y.max().item() + 1,
+                        num_layers=2,
+                        threshold=thres,
+                        dropout_p=dropout,
+                        init_adj=adj,
+                        norm=args.norm,
+                        res=args.res,
+                        X=data.x,)
+                        # frac_train_edges=0.,
+                        # train_nodes=train_indices,)
+                elif args.model_type == 'stegraphsage':
+                    model = STEGraphSAGE(
+                        in_channels=data.x.size(1),
+                        hidden_channels=hidden_channel,
+                        out_channels=data.y.max().item() + 1,
+                        num_layers=2,
+                        threshold=thres,
+                        dropout_p=dropout,
+                        init_adj=adj,
+                        norm=args.norm,
+                        res=args.res,
+                        num_sampled_nodes_per_hop=2,
+                        X=data.x,)
+                elif args.model_type == 'graphsage':
+                    model = GraphSAGE(
+                        in_channels=data.x.size(1),
+                        hidden_channels=hidden_channel,
+                        out_channels=data.y.max().item() + 1,
+                        num_layers=2,
+                        init_adj=adj,
+                        dropout_p=dropout,
+                        norm=args.norm,
+                        res=args.res,
+                        num_sampled_nodes_per_hop=2,
+                        X=data.x,)
+                elif args.model_type == 'clipgcn':
+                    raise NotImplementedError("CLIP-GCN not implemented")
+                    # model = ClipGCN(
+                    #     in_channels=data.x.size(1),
+                    #     hidden_channels=hidden_channel,
+                    #     out_channels=data.y.max().item() + 1,
+                    #     dropout_p=dropout,
+                    #     init_adj=adj,
+                    #     X=data.x,)
+                elif args.model_type == 'gcn':
+                    model = GCN(
+                        in_channels=data.x.size(1),
+                        hidden_channels=hidden_channel,
+                        out_channels=data.y.max().item() + 1,
+                        num_layers=2,
+                        init_adj=adj,
+                        X=data.x,
+                        dropout_p=dropout,
+                        norm=args.norm,
+                        res=args.res,)
+                elif args.model_type == 'lorastegcn':
+                    model = LoRASTEGCN(
+                        in_channels=data.x.size(1),
+                        hidden_channels=hidden_channel,
+                        out_channels=data.y.max().item() + 1,
+                        num_layers=2,
+                        init_adj=adj,
+                        r=lora_r,
+                        lora_alpha=args.lora_alpha,
+                        X=data.x,
+                        dropout_p=dropout,
+                        norm=args.norm,
+                        res=args.res,)
+                elif args.model_type == 'gat':
+                    model = GAT(
+                        in_channels=data.x.size(1),
+                        hidden_channels=hidden_channel,
+                        out_channels=data.y.max().item() + 1,
+                        num_layers=2,
+                        init_adj=adj,
+                        X=data.x,
+                        heads=args.heads,
+                        dropout_p=dropout,
+                        norm=args.norm,
+                        res=args.res,)
+                else:
+                    raise ValueError(f"Unknown model type: {args.model_type}")
 
-                                        print(f'Marglik={marglik}, Mean Val Acc={mean_val_acc:.3f}, Mean Test Acc={mean_test_acc:.3f}, Best Model Epoch={best_model_epoch}')
+                lap, _, _, _, best_model_epoch = marglik_optimization(
+                                                    model,
+                                                    train_indices=train_indices,
+                                                    train_labels=train_labels,
+                                                    val_indices=val_indices,
+                                                    val_labels=val_labels,
+                                                    y=data.y,
+                                                    stop_criterion=args.stop_criterion,
+                                                    lr_adj=lr_adj,
+                                                    lr=lr,
+                                                    weight_decay=weight_decay,
+                                                    n_epochs=args.n_epochs,
+                                                    n_hypersteps=args.n_hypersteps,
+                                                    n_epochs_burnin=args.n_epochs_burnin,
+                                                    n_hyper_stop=args.n_hyper_stop,
+                                                    marglik_frequency=args.marglik_frequency,
+                                                    subset_of_weights=args.subset_of_weights,
+                                                    hessian_structure=args.hessian_structure,
+                                                    device=device,
+                                                    learned_graphs_dir=learned_graphs_dir,
+                                                )    
 
-                                        # save model
-                                        if marglik > best_marglik:
-                                            best_marglik = marglik
-                                            best_model_dict = deepcopy(lap.model.state_dict())
-                                            print('Saving best model to:', out_dir)
-                                            torch.save(lap.model.state_dict(), osp.join(out_dir, f'{args.dataset}_model.pt'))
-                                            torch.save({'edge_index': edge_index, 'marglik': marglik,
-                                                        'test_acc': mean_test_acc,
-                                                        'homophily': h, 'num_edges': edge_index.size(1)},
-                                                       osp.join(out_dir, f'{args.dataset}_edge_index.pt'))
-                                        
-                                        margliks.append(marglik)
-                                meta = {k: (np.mean(v), np.std(v)) for k, v in stats.items()}
-                                meta['lr'] = lr
-                                meta['weight decay'] = weight_decay
-                                meta['hidden channels'] = hidden_channel
-                                meta['ste threshold'] = thres
-                                meta['lr_adj'] = lr_adj
-                                meta['dropout'] = dropout
-                                meta['lora_r'] = lora_r
+                marglik = lap.log_marginal_likelihood().item()
+                if 'graphsage' in args.model_type:
+                    out_adj = lap.model.forward_adj(full_adj=True)
+                else:
+                    out_adj = lap.model.forward_adj()
+                edge_index = adj_to_edge_index(out_adj)
+                h = homophily(edge_index, data.y.to(device))
+                print(f"Final num edges: {edge_index.size(1)}, Homophily: {h:.3f}")
+                print(f"Final Marglik: {marglik:.2f}")
+                
+                # mean predictive
+                mean_val_loss, mean_val_acc = mean_eval(lap, val_indices, val_labels, criterion)
+                mean_test_loss, mean_test_acc = mean_eval(lap, test_indices, test_labels, criterion)
+                
+                # track test acc at mean
+                stats['marglik'].append(marglik)
+                stats['mean val loss'].append(mean_val_loss)
+                stats['mean val acc'].append(mean_val_acc)
 
-                                model_metadata.append(meta)
+                stats['mean test loss'].append(mean_test_loss)
+                stats['mean test acc'].append(mean_test_acc)
+
+                stats['homophily'].append(h)
+                stats['num edges'].append(edge_index.size(1))
+                stats['best model epoch'].append(best_model_epoch)
+
+                print(f'Marglik={marglik}, Mean Val Acc={mean_val_acc:.3f}, Mean Test Acc={mean_test_acc:.3f}, Best Model Epoch={best_model_epoch}')
+
+                # save model
+                if (args.stop_criterion == 'marglik' and marglik > best_marglik) or \
+                    (args.stop_criterion == 'valloss' and mean_val_loss < best_valloss):
+                    best_marglik = marglik
+                    best_valloss = mean_val_loss
+                    model_fn = osp.join(out_dir, f'{args.init_graph}_{args.model_type}_model.pt')
+
+                    best_model_dict = deepcopy(lap.model.state_dict())
+                    print('Saving best model to:', out_dir)
+                    torch.save(lap.model.state_dict(),
+                               model_fn)
+                    torch.save({'edge_index': edge_index, 'marglik': marglik,
+                                'test_acc': mean_test_acc,
+                                'homophily': h, 'num_edges': edge_index.size(1)},
+                                osp.join(out_dir, f'{args.dataset}_edge_index.pt'))
+                
+                margliks.append(marglik)
+        meta = {k: (np.mean(v), np.std(v)) for k, v in stats.items()}
+        meta.update(hyperparams)
+        meta['n_data_rand_splits'] = args.n_data_rand_splits
+        meta['n_repeats'] = args.n_repeats
+        meta['n_epochs'] = args.n_epochs
+        meta['n_hyper_stop'] = args.n_hyper_stop
+
+        model_metadata.append(meta)
     
     
     def print_meta(meta):
@@ -489,11 +615,22 @@ if __name__ == "__main__":
     idx = np.argmin([x['mean val loss'][0] for x in model_metadata])
     print("Best model by Val Loss: ")
     print_meta(model_metadata[idx])
-    
+
     # save metadata
-    rst_file = osp.join(out_dir, f'{args.dataset}_{args.model_type}_rst.pt')
+    rst_file = osp.join(out_dir, f'{args.init_graph}_{args.model_type}_rst.pt')
     with open(rst_file, 'wb') as f:
         torch.save(model_metadata, f)
-    print(f"Saved results to {rst_file}")
+
+    # save final embeddings
+    model.load_state_dict(best_model_dict)
+    model.eval()
+    with torch.no_grad():
+        emb = model(torch.arange(data.x.size(0)).to(device)).cpu()
+    emb_fn = osp.join(out_dir, f'{args.init_graph}_{args.model_type}_emb.pt')
+    torch.save(emb, emb_fn)
+    
+    print(f"Saved results metadata to {rst_file}")
+    print(f"Saved final embeddings to {emb_fn}")
+    print(f"Best model saved to {model_fn}")
     print(f"Intermediate graphs saved to {learned_graphs_dir}")
     import ipdb; ipdb.set_trace()
