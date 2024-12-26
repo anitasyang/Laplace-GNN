@@ -445,7 +445,8 @@ if __name__ == "__main__":
                         init_adj=adj,
                         norm=args.norm,
                         res=args.res,
-                        X=data.x,)
+                        X=data.x,
+                        symmetric=args.symmetric,)
                         # frac_train_edges=0.,
                         # train_nodes=train_indices,)
                 elif args.model_type == 'stegraphsage':
@@ -460,7 +461,8 @@ if __name__ == "__main__":
                         norm=args.norm,
                         res=args.res,
                         num_sampled_nodes_per_hop=2,
-                        X=data.x,)
+                        X=data.x,
+                        symmetric=args.symmetric,)
                 elif args.model_type == 'graphsage':
                     model = GraphSAGE(
                         in_channels=data.x.size(1),
@@ -472,7 +474,8 @@ if __name__ == "__main__":
                         norm=args.norm,
                         res=args.res,
                         num_sampled_nodes_per_hop=2,
-                        X=data.x,)
+                        X=data.x,
+                        symmetric=args.symmetric,)
                 elif args.model_type == 'clipgcn':
                     raise NotImplementedError("CLIP-GCN not implemented")
                     # model = ClipGCN(
@@ -492,7 +495,8 @@ if __name__ == "__main__":
                         X=data.x,
                         dropout_p=dropout,
                         norm=args.norm,
-                        res=args.res,)
+                        res=args.res,
+                        symmetric=args.symmetric,)
                 elif args.model_type == 'lorastegcn':
                     model = LoRASTEGCN(
                         in_channels=data.x.size(1),
@@ -505,7 +509,8 @@ if __name__ == "__main__":
                         X=data.x,
                         dropout_p=dropout,
                         norm=args.norm,
-                        res=args.res,)
+                        res=args.res,
+                        symmetric=args.symmetric,)
                 elif args.model_type == 'gat':
                     model = GAT(
                         in_channels=data.x.size(1),
@@ -517,7 +522,8 @@ if __name__ == "__main__":
                         heads=args.heads,
                         dropout_p=dropout,
                         norm=args.norm,
-                        res=args.res,)
+                        res=args.res,
+                        symmetric=args.symmetric,)
                 else:
                     raise ValueError(f"Unknown model type: {args.model_type}")
 

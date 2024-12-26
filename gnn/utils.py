@@ -126,6 +126,9 @@ def argument_parser():
     parser.add_argument(
         '--heads', type=int, default=1,
         help="Number of attention heads")
+    parser.add_argument(
+        '--symmetric', type=to_bool, default=False,
+        help="Use symmetrize adjacency matrix")
     return parser
 
 def load_data(dataset, n_rand_splits=1):
