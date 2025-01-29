@@ -16,7 +16,11 @@ class GraphSAGEConv(nn.Module):
         self.lin.reset_parameters()
     
     def mean_agg(self, adj, x):
-        adj /= adj.sum(dim=1, keepdims=True)
+        row_sum = adj.sum(dim=1, keepdims=True)
+        row_sum[row_sum == 0] = 1  # Avoid division by zero
+        adj = adj / row_sum
+        # import ipdb; ipdb.set_trace()
+        # adj /= adj.sum(dim=1, keepdims=True)
         return adj @ x
     
     def forward(self, adj, x):

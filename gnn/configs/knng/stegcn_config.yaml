@@ -1,0 +1,138 @@
+# For knng graph
+
+Default:
+  model_type: stegcn
+  init_graph: knng
+  subset_of_weights: all
+  hessian_structure: kron
+  ste_thresh: 0.5
+  n_hypersteps: 10
+  n_data_rand_splits: 10
+  n_epochs_burnin: 50
+  marglik_frequency: 10
+  weight_decay: 5.0e-5
+  n_repeats: 10
+  dropout_p: 0.5
+  optimizer: adam
+  early_stop: False
+  grad_norm: True
+
+
+Cora:
+  dataset: cora
+  hidden_channels: 64
+  n_epochs: 400
+  lr: 0.001
+  lr_adj: 5
+  momentum_adj: 0.
+  res: False
+  norm: none
+  n_hyper_stop: 200
+  symmetric: False
+  train_masked_update: False
+  weight_decay_adj: 5.0e-4
+  
+Citeseer:
+  dataset: citeseer
+  init_graph: original
+  hidden_channels: 64
+  n_epochs: 200
+  lr: 0.001
+  lr_adj: 5
+  momentum_adj: 2.0
+  res: False
+  norm: none
+  n_hyper_stop: 150
+  symmetric: False
+  train_masked_update: False
+  weight_decay_adj: 5.0e-4
+
+Cornell:
+  dataset: cornell
+  hidden_channels: 64
+  n_epochs: 1000
+  n_epochs_burnin: 10
+  n_hyper_stop: 900
+  marglik_frequency: 20
+  lr: 0.01
+  lr_adj: 10
+  momentum_adj: 0.9
+  res: True
+  norm: layer
+  symmetric: True
+  train_masked_update: False
+  weight_decay_adj: 5.0e-4
+  weight_decay: 5.0e-4
+  early_stop: False
+
+# Texas:
+#   dataset: texas
+#   hidden_channels: 128
+#   n_epochs: 400
+#   n_epochs_burnin: 50
+#   n_hyper_stop: 400
+#   marglik_frequency: 10
+#   lr: 0.02
+#   lr_adj: 10
+#   momentum_adj: 0.9
+#   res: True
+#   norm: layer
+#   symmetric: True
+#   train_masked_update: False
+#   weight_decay_adj: 5.0e-4
+#   weight_decay: 5.0e-4
+#   early_stop: False
+
+Texas:
+  dataset: texas
+  hidden_channels: 128
+  n_epochs: 400
+  n_epochs_burnin: 10
+  n_hyper_stop: 350
+  marglik_frequency: 20
+  lr: 0.03
+  lr_adj: 10
+  momentum_adj: 0.9
+  res: True
+  norm: layer
+  symmetric: True
+  train_masked_update: False
+  weight_decay_adj: 5.0e-4
+  weight_decay: 5.0e-4
+  early_stop: False
+
+Wisconsin:
+  dataset: wisconsin
+  hidden_channels: 128
+  n_epochs: 600
+  n_epochs_burnin: 10
+  n_hyper_stop: 500
+  marglik_frequency: 20
+  lr: 0.005
+  lr_adj: 10
+  momentum_adj: 0.9
+  res: True
+  norm: layer
+  symmetric: True
+  train_masked_update: False
+  weight_decay_adj: 5.0e-4
+  weight_decay: 5.0e-4
+  early_stop: False
+
+# Wisconsin:
+#   dataset: wisconsin
+#   hidden_channels: 128
+#   n_epochs: 400
+#   n_epochs_burnin: 10
+#   n_hyper_stop: 400
+#   marglik_frequency: 20
+#   lr: 0.02
+#   lr_adj: 10
+#   momentum_adj: 0.9
+#   res: True
+#   norm: layer
+#   symmetric: True
+#   train_masked_update: False
+#   weight_decay_adj: 5.0e-4
+#   weight_decay: 5.0e-4
+#   early_stop: False

@@ -1,5 +1,6 @@
 # from functools import lru_cache
 import torch
+import torch.nn.functional as F
 
 
 def power_adj(adj, power):
@@ -15,23 +16,28 @@ def symmetrize_adj(adj):
     return adj
 
 
-def train_edge_mask(adj, n_layers, train_nodes,
-                   frac_train_edges=0.5):
-    """
-    Get gradient mask for adjacency matrix.
-
-    Parameters
-    ----------
-    receptive_field_adj : torch.Tensor
-        receptive field adjacency matrix (i.e. `\sum_i^{n_layer} A ** i`)
-    """
-
-    train_nodes = train_nodes.cpu()
-    adj = adj.clone().detach().cpu()
-    
-    adj_mask = torch.ones_like(adj)
+def train_adj_mask(n_nodes, train_nodes):
+    adj_mask = torch.ones(n_nodes, n_nodes)
     adj_mask[train_nodes[:, None], train_nodes] = 0
     return adj_mask
+
+# def train_edge_mask(adj, n_layers, train_nodes,
+#                    frac_train_edges=0.5):
+#     """
+#     Get gradient mask for adjacency matrix.
+
+#     Parameters
+#     ----------
+#     receptive_field_adj : torch.Tensor
+#         receptive field adjacency matrix (i.e. `\sum_i^{n_layer} A ** i`)
+#     """
+
+#     train_nodes = train_nodes.cpu()
+#     adj = adj.clone().detach().cpu()
+    
+#     adj_mask = torch.ones_like(adj)
+#     adj_mask[train_nodes[:, None], train_nodes] = 0
+#     return adj_mask
 
 class BinarizeSTE(torch.autograd.Function):
     """
@@ -39,25 +45,45 @@ class BinarizeSTE(torch.autograd.Function):
     """ 
     @staticmethod
     def setup_context(ctx, inputs, output):
-        ctx.save_for_backward(inputs[0])
+        if inputs[2] is not None:
+            ctx.save_for_backward(inputs[2])
         ctx.threshold = inputs[1]
-        ctx.mask = inputs[2]
+        ctx.sign_grad = inputs[3]
 
     @staticmethod
-    def forward(input, threshold: float, mask=None):
+    def forward(input, threshold: float, mask=None, sign_grad=False):
+        """
+        Parameters
+        ----------
+        input : torch.Tensor
+            Input tensor.
+        threshold : float
+            Threshold value.
+        mask : torch.Tensor
+            Mask tensor.
+        sign_grad : bool
+            Apply sign gradient descent.
+        """
         return (input > threshold).float()
 
     @staticmethod
     def backward(ctx, grad_output):
-        if ctx.mask is not None:  # gradient masking on the adj matrix
-            # import ipdb; ipdb.set_trace()
-            grad_output *= ctx.mask
+        if ctx.saved_tensors:
+            mask, = ctx.saved_tensors
+            grad_output *= mask
         # import ipdb; ipdb.set_trace()
+        # if ctx.mask is not None:  # gradient masking on the adj matrix
+            # import ipdb; ipdb.set_trace()
+        if ctx.sign_grad:
+            grad_output = torch.sign(grad_output)
+        # import ipdb; ipdb.set_trace()
+        # print(grad_output.max().item(), grad_output.min().item())
         # symmetrize the gradient
         # grad_output = (grad_output + grad_output.T) / 2
         # grad_output = (grad_output + torch.einsum('ij->ji', grad_output)) / 2
         # import ipdb; ipdb.set_trace()
-        return grad_output, None, None
+        # return F.hardtanh(grad_output), None, None
+        return grad_output, None, None, None
 
 
 class Clipping(torch.autograd.Function):
@@ -92,7 +118,7 @@ def sample_neigh_adj(adj, k=None, seed=0):
     _, col_idx = adj.nonzero(as_tuple=True)    
     
     neighbors = torch.split(col_idx, adj.sum(dim=1).int().tolist())
-    torch.manual_seed(seed)
+    # torch.manual_seed(seed)
     
     sampled_adj = torch.zeros_like(adj)
     for i, neigh in enumerate(neighbors):

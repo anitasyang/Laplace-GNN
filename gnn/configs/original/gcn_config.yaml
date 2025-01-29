@@ -1,0 +1,84 @@
+# For original graph
+
+Default:
+  model_type: gcn
+  init_graph: original
+  n_data_rand_splits: 10
+  n_repeats: 10
+  dropout_p: 0.5
+  weight_decay: 5.0e-5
+  optimizer: adam
+  early_stop: False
+  symmetric: False
+  n_epochs: 200
+  res: False
+  norm: none
+  # subset_of_weights: all
+  # hessian_structure: kron
+  # grad_norm: True
+  # ste_thresh: 0.5
+  # n_hypersteps: 10
+  # n_epochs_burnin: 50
+  # marglik_frequency: 10
+
+Cora:
+  dataset: cora
+  hidden_channels: 64
+  n_epochs: 200
+  lr: 0.001
+
+Citeseer:
+  dataset: citeseer
+  hidden_channels: 64
+  n_epochs: 200
+  lr: 0.001
+
+Cornell:
+  dataset: cornell
+  hidden_channels: 64
+  n_epochs: 200
+  lr: 0.001
+  norm: layer
+  res: True
+
+Texas:
+  dataset: texas
+  hidden_channels: 128
+  n_epochs: 200
+  lr: 0.001
+  norm: layer
+  res: True
+
+Wisconsin:
+  dataset: wisconsin
+  hidden_channels: 128
+  n_epochs: 200
+  lr: 0.001
+  norm: layer
+  res: True
+
+Banana:
+  dataset: banana
+  num_layers: 1
+  hidden_channels: 64
+  n_epochs: 200
+  lr: 0.01
+  weight_decay: 5.0e-4
+  res: False
+  norm: none
+  symmetric: True
+  n_data_rand_splits: 1
+  n_repeats: 1
+
+Circle:
+  num_layers: 2
+  weight_decay: 5.0e-3
+  dataset: circle
+  hidden_channels: 8
+  n_epochs: 200
+  lr: 0.05
+  n_data_rand_splits: 1
+  n_repeats: 1
+  norm: none
+  res: False
+  symmetric: True

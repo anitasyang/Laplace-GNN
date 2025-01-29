@@ -64,6 +64,7 @@ class BaseGNN(nn.Module):
         
         self.update_adj = update_adj
         
+        self.symmetric = symmetric
         if symmetric:  # symmetrize adjacency matrix
             adj = init_adj + torch.einsum('ij->ji', init_adj)
             adj[adj > 1] = 1
@@ -73,7 +74,7 @@ class BaseGNN(nn.Module):
 
         self.adj = nn.Parameter(
             adj, requires_grad=update_adj)
-
+        
         self.in_channels = in_channels
         self.hidden_channels = hidden_channels
         self.out_channels = out_channels
@@ -103,8 +104,9 @@ class BaseGNN(nn.Module):
                 self.res.append(
                     nn.Linear(in_channels, hidden_channels))
             in_channels = hidden_channels
-        
+
         for _ in range(num_layers - 2):
+            import ipdb; ipdb.set_trace()
             self.convs.append(
                 self.init_conv(in_channels, hidden_channels, **kwargs))
             if res:
@@ -124,18 +126,37 @@ class BaseGNN(nn.Module):
     def init_conv(self, in_channels: int,
                   out_channels: int, **kwargs):
         raise NotImplementedError
+    
+    def forward_adj(self):
+        raise NotImplementedError
+    
+    def full_adj(self):
+        return self.adj
         
     def forward(self, x_indices: torch.Tensor):
         adj = self.forward_adj()
+        # if torch.isnan(adj).any() or torch.isinf(adj).any():
+        #     raise ValueError("NaN or Inf in adjacency matrix.")
         x = self.X
         for i in range(self.num_layers - 1):
             if i < len(self.res):
                 x = self.res[i](x) + self.convs[i](adj, x)
             else:
                 x = self.convs[i](adj, x)
+            # if torch.isnan(x).any() or torch.isinf(x).any():
+            #     import ipdb; ipdb.set_trace()
+            #     raise ValueError("NaN or Inf in hidden layer.")
             x = self.norms[i](x)
+            # if torch.isnan(x).any() or torch.isinf(x).any():
+            #     raise ValueError("NaN or Inf in normalization layer.")
             x = self.act(x)
+            # x = x / x.norm(dim=-1, keepdim=True)
+            # if torch.isnan(x).any() or torch.isinf(x).any():
+            #     raise ValueError("NaN or Inf in activation layer.")
             x = self.dropout(x)
+            # import ipdb; ipdb.set_trace()
         x = self.convs[-1](adj, x)
+        # if torch.isnan(x).any() or torch.isinf(x).any():
+        #     raise ValueError("NaN or Inf in output layer.")
         return x[x_indices]
 
