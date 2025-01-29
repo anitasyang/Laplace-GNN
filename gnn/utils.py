@@ -1,5 +1,6 @@
 import os
 import os.path as osp
+import GPUtil
 import argparse
 import numpy as np
 import torch
@@ -12,6 +13,7 @@ from typing import Optional
 from torch import nn
 from torch_geometric.nn import knn_graph
 from torch_geometric.utils import to_scipy_sparse_matrix, homophily
+from torch_geometric.data import Data
 from torch_geometric.datasets import KarateClub, Planetoid, \
     Actor, WikipediaNetwork, WebKB
 
@@ -42,7 +44,7 @@ def argument_parser():
         choices=['cora', 'citeseer', 'pubmed',
                  'chameleon', 'squirrel',
                  'actor', 'texas', 'wisconsin', 'cornell',
-                 'karate'])
+                 'karate', 'banana', 'circle'])
     parser.add_argument(
         '--model_type', type=str,
         choices=['stegcn', 'clipgcn', 'gcn', 'lorastegcn',
@@ -129,7 +131,74 @@ def argument_parser():
     parser.add_argument(
         '--symmetric', type=to_bool, default=False,
         help="Use symmetrize adjacency matrix")
+    parser.add_argument(
+        '--train_masked_update', type=to_bool, default=False,
+        help="Exclude train-train edge updates")
+    parser.add_argument(
+        '--num_sampled_nodes_per_hop', type=int, default=10,
+        help="Number of sampled nodes per hop for GraphSAGE")
+    parser.add_argument(
+        '--optimizer', type=str, default='adam',
+        choices=['adam', 'sam'],
+        help="Optimizer for model training")
+    parser.add_argument(
+        '--grad_norm', type=to_bool, default=False,
+        help="Use gradient clipping")
+    parser.add_argument(
+        '--sign_grad', type=to_bool, default=False,
+        help="Use sign gradient")
+    parser.add_argument(
+        '--momentum_adj', type=float, default=0.,
+        help="SGD momentum for adjacency matrix")
+    parser.add_argument(
+        '--early_stop', type=to_bool, default=False,
+        help="Use early stopping")
+    parser.add_argument(
+        '--overwrite_config', type=to_bool, default=False,
+        help="Overwrite config file")
+    parser.add_argument(
+        '--plot_loss', type=to_bool, default=False,
+        help="Plot loss")
+    parser.add_argument(
+        '--num_layers', type=int, default=2,
+        help="Number of layers for GCN model")
     return parser
+
+def gen_edge_index(labels, num_edges, homophily, seed=0):
+    num_nodes = labels.shape[0]
+    edge_index = torch.zeros(num_edges, 2, dtype=torch.long)
+
+    np.random.seed(seed)
+    for i in range(num_edges):
+        while True:
+            src = np.random.randint(num_nodes)
+            dst = np.random.randint(num_nodes)
+            rand = np.random.rand()
+            if src != dst:
+                if (labels[src] == labels[dst] and rand < homophily) or \
+                    (labels[src] != labels[dst] and rand >= homophily):
+                    edge_index[i] = torch.tensor([src, dst])
+                    break
+    intra_edges = (labels[edge_index[:, 0]] == labels[edge_index[:, 1]]).sum()
+    inter_edges = num_edges - intra_edges
+    print(f"Generated {intra_edges} intra-edges and {inter_edges} inter-edges")
+    return edge_index.t().contiguous()
+
+def gen_circle_edge_index(x, y, num_edges, homophily, seed=0):
+    np.random.seed(seed)
+    edge_index = []
+    nodes = np.random.randint(0, x.shape[0], num_edges)
+    for u in nodes:
+        x_u = x[u]
+        distances = np.sum((x - x_u) ** 2, axis=1)
+        sorted_indices = np.argsort(distances)
+        for v in sorted_indices[:10]:
+            if (homophily and y[u] == y[v]) or (not homophily and y[u] != y[v]):
+                edge_index.append([u, v])
+                break
+    edge_index = torch.tensor(edge_index).t().contiguous()
+    return edge_index
+
 
 def load_data(dataset, n_rand_splits=1):
     root = os.path.join(Path.home(), 'data')
@@ -143,6 +212,62 @@ def load_data(dataset, n_rand_splits=1):
         data = WebKB(root=root, name=dataset.capitalize())[0]
     elif dataset == 'karate':
         data = KarateClub()[0]
+    elif dataset == 'banana':
+        import pandas as pd
+        df = pd.read_csv("data/banana.csv")
+        df['Class'].replace({-1: 0}, inplace=True)
+        x = torch.tensor(df[['At1', 'At2']].values, dtype=torch.float)
+        y = torch.tensor(df['Class'].values, dtype=torch.long)
+        # edge_index = torch.cat(
+        #     [torch.arange(x.size(0)).unsqueeze(0),
+        #      torch.arange(x.size(0)).unsqueeze(0)], dim=0)
+        # df_x = pd.read_csv("data/snelson/train_inputs.csv", header=None)
+        # df_y = pd.read_csv("data/snelson/train_outputs.csv", header=None)
+        # x = torch.tensor(df_x.values, dtype=torch.float)
+        # y = torch.tensor(df_y.values, dtype=torch.float)
+        data = Data(x=x, y=y, edge_index=edge_index)
+        # import ipdb, ipdb; ipdb.set_trace()
+        # random graph
+        # data.edge_index = torch.randint(0, data.x.size(0), (2, 500))
+    elif dataset == 'circle':
+        # from sklearn.datasets import make_circles
+        # X, y = make_circles(n_samples=100, noise=0.05, factor=0.7,
+        #                     random_state=42)
+        from sklearn.datasets import make_moons
+        X, y = make_moons(n_samples=100, noise=0.2, random_state=42)
+        # edge_index = torch.cat(
+        #     [torch.arange(X.shape[0]).unsqueeze(0),
+        #      torch.arange(X.shape[0]).unsqueeze(0)], dim=0)
+        edge_index = gen_edge_index(y, 70, 0.2)
+        # edge_index = gen_circle_edge_index(X, y, 200, True)
+        # np.random.seed(42)
+        # # edge_index = np.random.randint(0, X.shape[0], (2, 5000))
+        # # edge_index = torch.tensor(edge_index, dtype=torch.long)
+        
+        # edge_index = np.random.randint(0, X.shape[0], (2, 10))
+        # nodes_0 = np.where(y == 0)[0]
+        # nodes_0 = nodes_0[np.random.randint(0, len(nodes_0), 300)]
+        # nodes_1 = np.where(y == 1)[0]
+        # nodes_1 = nodes_1[np.random.randint(0, len(nodes_1), 300)]
+        
+        # # Heterophilic graph
+        # # syn_edges = np.stack([nodes_0, nodes_1], axis=0)
+        # # # Homophilic graph
+        # syn_edges = np.concatenate([
+        #     np.stack([nodes_0[:len(nodes_0) // 2], nodes_0[len(nodes_0) // 2:]], axis=0),
+        #     np.stack([nodes_1[:len(nodes_1) // 2], nodes_1[len(nodes_1) // 2:]], axis=0)], axis=1)
+        # import ipdb; ipdb.set_trace()
+
+        # edge_index = np.concatenate([
+        #     edge_index, syn_edges], axis=1)
+        # edge_index = torch.tensor(edge_index, dtype=torch.long)
+        data = Data(x=torch.tensor(X, dtype=torch.float),
+                    y=torch.tensor(y, dtype=torch.long),
+                    edge_index=edge_index)
+        with open('/home/anita/work/laplace-gnn-results/circle/data_hetero.pkl', 'wb') as f:
+            torch.save(data, f)
+    else:
+        raise ValueError(f"Unknown dataset: {dataset}")
     
     # if n_rand_splits == 1 and hasattr(data, 'val_mask'):
     #     if data.train_mask.ndim > 1:
@@ -281,3 +406,9 @@ def fully_connected_labels(labels):
         for j in range(num_nodes):
             adj[i, j] = labels[i] == labels[j]
     return adj.bool().float()
+
+def unused_gpu():
+    for gpu in GPUtil.getGPUs():
+        if gpu.load == 0:
+            return gpu.id
+    return None
