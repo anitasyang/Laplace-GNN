@@ -21,29 +21,33 @@ Default:
 Cora:
   dataset: cora
   hidden_channels: 64
-  n_epochs: 400
+  n_epochs: 200
+  n_epochs_burnin: 20
+  n_hyper_stop: 1000
+  marglik_frequency: 10
   lr: 0.001
-  lr_adj: 5
-  momentum_adj: 0.
+  lr_adj: 0.8
+  momentum_adj: 0.9
   res: False
   norm: none
-  n_hyper_stop: 200
   symmetric: False
   train_masked_update: False
   weight_decay_adj: 5.0e-4
   
+  
 Citeseer:
   dataset: citeseer
-  init_graph: original
   hidden_channels: 64
-  n_epochs: 200
   lr: 0.001
-  lr_adj: 5
-  momentum_adj: 2.0
+  n_epochs: 400
+  n_epochs_burnin: 50
+  n_hyper_stop: 350
+  marglik_frequency: 10
+  lr_adj: 1.0
+  momentum_adj: 0.9
   res: False
   norm: none
-  n_hyper_stop: 150
-  symmetric: False
+  symmetric: True
   train_masked_update: False
   weight_decay_adj: 5.0e-4
 
@@ -64,24 +68,6 @@ Cornell:
   weight_decay_adj: 5.0e-4
   weight_decay: 5.0e-4
   early_stop: False
-
-# Texas:
-#   dataset: texas
-#   hidden_channels: 128
-#   n_epochs: 400
-#   n_epochs_burnin: 50
-#   n_hyper_stop: 400
-#   marglik_frequency: 10
-#   lr: 0.02
-#   lr_adj: 10
-#   momentum_adj: 0.9
-#   res: True
-#   norm: layer
-#   symmetric: True
-#   train_masked_update: False
-#   weight_decay_adj: 5.0e-4
-#   weight_decay: 5.0e-4
-#   early_stop: False
 
 Texas:
   dataset: texas
@@ -118,21 +104,3 @@ Wisconsin:
   weight_decay_adj: 5.0e-4
   weight_decay: 5.0e-4
   early_stop: False
-
-# Wisconsin:
-#   dataset: wisconsin
-#   hidden_channels: 128
-#   n_epochs: 400
-#   n_epochs_burnin: 10
-#   n_hyper_stop: 400
-#   marglik_frequency: 20
-#   lr: 0.02
-#   lr_adj: 10
-#   momentum_adj: 0.9
-#   res: True
-#   norm: layer
-#   symmetric: True
-#   train_masked_update: False
-#   weight_decay_adj: 5.0e-4
-#   weight_decay: 5.0e-4
-#   early_stop: False

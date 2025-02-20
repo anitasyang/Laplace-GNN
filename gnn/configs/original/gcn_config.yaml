@@ -4,7 +4,7 @@ Default:
   model_type: gcn
   init_graph: original
   n_data_rand_splits: 10
-  n_repeats: 10
+  n_repeats: 1
   dropout_p: 0.5
   weight_decay: 5.0e-5
   optimizer: adam
