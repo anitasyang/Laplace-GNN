@@ -793,15 +793,18 @@ if __name__ == "__main__":
     print_meta(model_metadata[idx_vl][0]['params'])
 
     # save metadata
-    # rst_file = osp.join(out_dir, f'{args_dict['init_graph']}_{args_dict['model_type']}_rst.pt')
-    rst_file = osp.join(out_dir, f'{args_dict["init_graph"]}_{args_dict["model_type"]}_rst.pkl')
-    with open(rst_file, 'wb') as f:
-        import pickle
-        pickle.dump({
-            'best_marglik': model_metadata[idx_ml],
-            'best_valloss': model_metadata[idx_vl],
-        }, f)
+    # rst_file = osp.join(out_dir, f'{args_dict["init_graph"]}_{args_dict["model_type"]}_rst.pkl')
+    # with open(rst_file, 'wb') as f:
+    #     import pickle
+    #     pickle.dump({
+    #         'best_marglik': model_metadata[idx_ml],
+    #         'best_valloss': model_metadata[idx_vl],
+    #     }, f)
         # torch.save(model_metadata, f)
+
+    with open(osp.join(out_dir, f'{args_dict["dataset"]}_{args_dict["init_graph"]}_{args_dict["model_type"]}_all_rst.csv'), 'wb') as f:
+        import pickle
+        pickle.dump(model_metadata, f)
 
     # save final embeddings
     # model.load_state_dict(best_model_dict)
