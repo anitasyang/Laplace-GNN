@@ -1,4 +1,4 @@
-export PYTHONPATH=/home/anita/work/Laplace-GNN:/home/anita/work
+export PYTHONPATH=..:$PYTHONPATH
 planetoid_datasets=(cora citeseer pubmed)
 webkb_datasets=(cornell texas wisconsin washington)
 wiki_datasets=(chameleon squirrel)

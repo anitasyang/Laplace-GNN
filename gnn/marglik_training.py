@@ -478,8 +478,9 @@ if __name__ == "__main__":
         else [0.2, 0.3, 0.4, 0.5]
     lora_rs = [16, 32, 64] if (args_dict['lora_r'] is None and 'lora' in args_dict['model_type']) \
         else [args_dict['lora_r']]
-    norms = ['batch', 'layer', 'none'] if args_dict['norm'] is None \
-        else [args_dict['norm']]
+    # norms = ['batch', 'layer', 'none'] if args_dict['norm'] is None \
+    #     else [args_dict['norm']]
+    norms = [args_dict['norm']]
     res_conn = [True, False] if args_dict['res'] is None \
         else [args_dict['res']]
     weight_decays_adj = [5e-3, 5e-4, 5e-5, 5e-6, 5e-7] if (args_dict['weight_decay_adj'] is None and
@@ -611,6 +612,9 @@ if __name__ == "__main__":
                       '-' * 20)
                 # initialize model
                 # import ipdb; ipdb.set_trace()
+                if 'model' in locals():
+                    del model
+                    torch.cuda.empty_cache()
                 model = model_classes[args_dict['model_type']](**common_args, **model_specific_args[args_dict['model_type']])
                 
                 model_dicts, losses, val_losses, neg_margliks = marglik_optimization(
