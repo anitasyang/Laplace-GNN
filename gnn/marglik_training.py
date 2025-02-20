@@ -15,7 +15,7 @@ from collections import defaultdict
 from matplotlib import pyplot as plt
 
 from laplace import Laplace
-from sam.sam import SAM
+# from sam.sam import SAM
 
 from gnn.models import GCN, STEGCN, LoRASTEGCN, GAT, \
     STEGraphSAGE, GraphSAGE
@@ -653,7 +653,7 @@ if __name__ == "__main__":
                         hessian_structure=args_dict['hessian_structure'],)
                     lap.fit(train_loader)
                 
-                    marglik = lap.log_marginal_likelihood()
+                    marglik = lap.log_marginal_likelihood().item()
 
                     out_adj = lap.model.full_adj()
                     edge_index = adj_to_edge_index(out_adj)
@@ -727,7 +727,9 @@ if __name__ == "__main__":
                                     'test_acc': mean_test_acc,
                                     'homophily': h, 'num_edges': edge_index.size(1)},
                                     osp.join(out_dir, f'{args_dict["dataset"]}_edge_index.pt'))
-                
+
+                    del lap
+                    torch.cuda.empty_cache()
                     margliks.append(marglik)
         # meta = {k: (np.mean(v), np.std(v)) for k, v in stats.items()}
         meta = dict()
